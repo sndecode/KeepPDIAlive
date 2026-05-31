@@ -1,0 +1,65 @@
+name: Keep PDI Alive
+
+on:
+  schedule:
+    # Runs at 06:00 UTC every 4 days. Cron has no clean "every 4 days",
+    # so we fire on fixed dates well within the 10-day window.
+    - cron: "0 6 1,5,9,13,17,21,25,29 * *"
+  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
+
+# Needed so the built-in token can read this workflow's run history
+# (notify.py uses it to compute "days left").
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install playwright requests
+          python -m playwright install --with-deps chromium
+
+      - name: Wake the PDI
+        env:
+          SN_DEV_USER: ${{ secrets.SN_DEV_USER }}
+          SN_DEV_PASS: ${{ secrets.SN_DEV_PASS }}
+        run: python wake_pdi.py
+
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: |
+            debug-*.png
+            failure*.png
+          if-no-files-found: ignore
+
+      - name: Notify success (Telegram)
+        if: success()
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python notify.py success
+
+      - name: Notify failure (Telegram + screenshot + days left)
+        if: failure()
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python notify.py failure
